@@ -44,9 +44,9 @@ libPak::libPak(QIODevice *dev):_dev(dev), _type(PakUnknown) {
 		register int offset = 0;
 
 		// TODO: Find a better way to reserve space on the list!
-		for (int j = 0; j < _nFiles; j++) { _files.push_back(PakFile()); }
+		for (unsigned int j = 0; j < _nFiles; j++) { _files.push_back(PakFile()); }
 		QString last("");
-		for (int j = 0; j < _nFiles; j++) {
+		for (unsigned int j = 0; j < _nFiles; j++) {
 			_files[j].offset = (*(unsigned int *)(filesBuf+offset) & 0x00FFFFFF) * 0x800;
 			offset += 3;
 			unsigned int save = *(unsigned char *)(filesBuf+offset);
