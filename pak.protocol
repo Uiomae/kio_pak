@@ -1,0 +1,12 @@
+[Protocol]
+exec=kio_pak
+protocol=pak
+mimetype=application/x-pak
+input=filesystem
+output=filesystem
+listing=Name,Type,Size,Date,Access,Owner,Group,Link
+reading=true
+source=true
+DocPath=kioslave/pak.html
+Icon=par
+Class=:local
