@@ -48,6 +48,7 @@ bool KPak::openArchive(int mode) {
 			rootDir()->addEntry(e);
 		} else {
 			KArchiveDirectory *d = findOrCreate((*it).left(pos));
+			d->addEntry(e);
 		}
 	}
 }
