@@ -8,6 +8,7 @@
 #include <klocale.h>
 #include <kdebug.h>
 #include <kinstance.h>
+#include <kremoteencoding.h>
 
 // QT includes
 #include <qfile.h>
@@ -38,7 +39,94 @@ PakProtocol::PakProtocol(const QCString &pool, const QCString &app): SlaveBase("
 }
 
 void PakProtocol::listDir(const KURL &url) {
-	kdDebug(PAK_DEBUG_ID) << "Entering listDir()" << endl;
+	QString path;
+	KIO::Error errorNum;
+	if ( !checkNewFile( url, path, errorNum ) )
+	{
+		if ( errorNum == KIO::ERR_CANNOT_OPEN_FOR_READING )
+		{
+			// If we cannot open, it might be a problem with the archive header (e.g. unsupported format)
+			// Therefore give a more specific error message
+			error( KIO::ERR_SLAVE_DEFINED,
+					i18n( "Could not open the file, probably due to an unsupported file format.\n%1")
+					.arg( url.prettyURL() ) );
+			return;
+		}
+		else if ( errorNum != KIO::ERR_IS_DIRECTORY )
+		{
+			// We have any other error
+			error( errorNum, url.prettyURL() );
+			return;
+		}
+		// It's a real dir -> redirect
+		KURL redir;
+		redir.setPath( url.path() );
+		kdDebug( PAK_DEBUG_ID ) << "Ok, redirection to " << redir.url() << endl;
+		redirection( redir );
+		finished();
+		// And let go of the tar file - for people who want to unmount a cdrom after that
+		delete _pakFile;
+		_pakFile = 0L;
+		return;
+	}
+
+	if ( path.isEmpty() )
+	{
+		KURL redir( url.protocol() + QString::fromLatin1( ":/") );
+		kdDebug( PAK_DEBUG_ID ) << "url.path()==" << url.path() << endl;
+		redir.setPath( url.path() + QString::fromLatin1("/") );
+		kdDebug( PAK_DEBUG_ID ) << "ArchiveProtocol::listDir: redirection " << redir.url() << endl;
+		redirection( redir );
+		finished();
+		return;
+	}
+
+	path = QString::fromLocal8Bit(remoteEncoding()->encode(path));
+
+	kdDebug( PAK_DEBUG_ID ) << "checkNewFile done" << endl;
+	const KArchiveDirectory* root = _pakFile->directory();
+	const KArchiveDirectory* dir;
+	if (!path.isEmpty() && path != "/")
+	{
+		kdDebug(PAK_DEBUG_ID) << QString("Looking for entry %1").arg(path) << endl;
+		const KArchiveEntry* e = root->entry( path );
+		if ( !e )
+		{
+			error( KIO::ERR_DOES_NOT_EXIST, url.prettyURL() );
+			return;
+		}
+		if ( ! e->isDirectory() )
+		{
+			error( KIO::ERR_IS_FILE, url.prettyURL() );
+			return;
+		}
+		dir = (KArchiveDirectory*)e;
+	} else {
+		dir = root;
+	}
+
+	QStringList l = dir->entries();
+	totalSize( l.count() );
+
+	KIO::UDSEntry entry;
+	QStringList::Iterator it = l.begin();
+	for( ; it != l.end(); ++it )
+	{
+		kdDebug(PAK_DEBUG_ID) << (*it) << endl;
+		const KArchiveEntry* archiveEntry = dir->entry( (*it) );
+
+		createUDSEntry( archiveEntry, entry );
+
+		listEntry( entry, false );
+	}
+
+	listEntry( entry, true ); // ready
+
+	finished();
+
+	kdDebug( PAK_DEBUG_ID ) << "ArchiveProtocol::listDir done" << endl;
+
+	/*kdDebug(PAK_DEBUG_ID) << "Entering listDir()" << endl;
 	totalSize(1);		// ONE file (Magic!!)
 	KIO::UDSEntry entry;
 	createUDSEntry(NULL, entry);
@@ -46,17 +134,89 @@ void PakProtocol::listDir(const KURL &url) {
 	listEntry(entry, false);
 	listEntry(entry, true);		// End
 	finished();
-	kdDebug(PAK_DEBUG_ID) << "-<> Exiting listDir()" << endl;
+	kdDebug(PAK_DEBUG_ID) << "-<> Exiting listDir()" << endl;*/
 }
 
 void PakProtocol::stat(const KURL &url) {
-	kdDebug(PAK_DEBUG_ID) << "Entering stat()" << endl;
+	QString path;
+	KIO::UDSEntry entry;
+	KIO::Error errorNum;
+	if ( !checkNewFile( url, path, errorNum ) )
+	{
+		// We may be looking at a real directory - this happens
+		// when pressing up after being in the root of an archive
+		if ( errorNum == KIO::ERR_CANNOT_OPEN_FOR_READING )
+		{
+			// If we cannot open, it might be a problem with the archive header (e.g. unsupported format)
+			// Therefore give a more specific error message
+			error( KIO::ERR_SLAVE_DEFINED,
+					i18n( "Could not open the file, probably due to an unsupported file format.\n%1")
+					.arg( url.prettyURL() ) );
+			return;
+		}
+		else if ( errorNum != KIO::ERR_IS_DIRECTORY )
+		{
+			// We have any other error
+			error( errorNum, url.prettyURL() );
+			return;
+		}
+		// Real directory. Return just enough information for KRun to work
+		KIO::UDSAtom atom;
+		atom.m_uds = KIO::UDS_NAME;
+		atom.m_str = url.fileName();
+		entry.append( atom );
+		kdDebug( PAK_DEBUG_ID ) << "ArchiveProtocol::stat returning name=" << url.fileName() << endl;
+
+		KDE_struct_stat buff;
+		if ( KDE_stat( QFile::encodeName( url.path() ), &buff ) == -1 )
+		{
+			// Should not happen, as the file was already stated by checkNewFile
+			error( KIO::ERR_COULD_NOT_STAT, url.prettyURL() );
+			return;
+		}
+
+		atom.m_uds = KIO::UDS_FILE_TYPE;
+		atom.m_long = buff.st_mode & S_IFMT;
+		entry.append( atom );
+
+		statEntry( entry );
+
+		finished();
+
+		// And let go of the tar file - for people who want to unmount a cdrom after that
+		delete _pakFile;
+		_pakFile = 0L;
+		return;
+	}
+
+	const KArchiveDirectory* root = _pakFile->directory();
+	const KArchiveEntry* archiveEntry;
+	if ( path.isEmpty() )
+	{
+		path = QString::fromLatin1( "/" );
+		archiveEntry = root;
+	} else {
+		path = QString::fromLocal8Bit(remoteEncoding()->encode(path));
+		archiveEntry = root->entry( path );
+	}
+	if ( !archiveEntry )
+	{
+		error( KIO::ERR_DOES_NOT_EXIST, url.prettyURL() );
+		return;
+	}
+
+	createUDSEntry( archiveEntry, entry );
+	statEntry( entry );
+
+	finished();
+
+	/*kdDebug(PAK_DEBUG_ID) << "Entering stat()" << endl;
 	KIO::UDSEntry entry;
 	createUDSEntry(NULL, entry);
 	kdDebug(PAK_DEBUG_ID) << "Giving file away" << endl;
 	statEntry(entry);
 	finished();
-	kdDebug(PAK_DEBUG_ID) << "-<> Exiting stat()" << endl;
+	kdDebug(PAK_DEBUG_ID) << "-<> Exiting stat()" << endl;*/
 }
 
 void PakProtocol::get(const KURL &url) {
@@ -73,11 +233,11 @@ void PakProtocol::createUDSEntry(const KArchiveEntry *archiveEntry, KIO::UDSEntr
 	entry.clear();
 
 	atom.m_uds = KIO::UDS_NAME;
-	atom.m_str = QString("Magic.MAG");
+	atom.m_str = remoteEncoding()->decode(archiveEntry->name().local8Bit());
 	entry.append(atom);
 
 	atom.m_uds = KIO::UDS_SIZE;
-	atom.m_long = 127;
+	atom.m_long = archiveEntry->isFile() ? ((KArchiveFile *)archiveEntry)->size() : 0L ;
 	entry.append(atom);
 
 	atom.m_uds = KIO::UDS_FILE_TYPE;
