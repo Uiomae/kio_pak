@@ -2,6 +2,7 @@
 #define __KPAK_H_
 
 #include <karchive.h>
+#include "libpak.h"
 
 class KPak : public KArchive {
 	public:
@@ -38,8 +39,8 @@ class KPak : public KArchive {
 		virtual bool closeArchive();
 
 	private:
-		QIODevice * _dev;
 		QString _filename;
+		libPak *_pakFile;
 };
 
 #endif //__KPAK_H_
