@@ -38,6 +38,7 @@ class libPak {
 
 		inline bool isValidPak() { return _type != PakUnknown; }
 		QStringList getFilesAt(const QString &path);
+		QStringList getFoldersAt(const QString &path);
 };
 
 #endif // __LIBPAK_H_

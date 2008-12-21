@@ -1,6 +1,7 @@
 #include "libpak.h"
 #include <qstringlist.h> 
 #include <qregexp.h>
+#include <qmap.h>
 
 libPak::libPak(QIODevice *dev):_dev(dev), _type(PakUnknown) {
 	// Store IODevice original position
@@ -61,7 +62,7 @@ libPak::libPak(QIODevice *dev):_dev(dev), _type(PakUnknown) {
 			}
 			last = _files[j].filename = last.left(save).append(QCString(filesBuf+offset, strLen + 1));
 			offset += strLen;
-			_files[j].filename.append("." + extsList[*(unsigned char*)(filesBuf + offset++) - 1]);
+			_files[j].filename.append("." + extsList[*(unsigned char*)(filesBuf + offset++) - 1]).prepend("\\");
 			_filenamesOnly.push_back(_files[j].filename);
 		}
 	}
@@ -79,5 +80,20 @@ QStringList libPak::getFilesAt(const QString &path) {
 	QString newPath(path);
 	newPath.replace("\\", "\\\\");
 	return _filenamesOnly.grep(QRegExp("^" + newPath + "\\\\[^\\\\]+$")).gres(QRegExp("^" + newPath + "\\\\"), "");
+}
+
+QStringList libPak::getFoldersAt(const QString &path) {
+	QString newPath(path);
+	newPath.replace("\\", "\\\\");
+	QStringList tempList(_filenamesOnly.grep(QRegExp("^" + newPath + "\\\\[^\\\\]+\\\\[^\\\\]+$")).gres(QRegExp("^" + newPath + "\\\\([^\\\\]+)\\\\.*"), "\\1"));
+	// Remove duplicates
+	QMap<QString, int> tempMap;
+	QStringList::Iterator it = tempList.end();
+	while (it != tempList.begin())
+	{
+		tempMap[*it] = 0;
+		it--;
+	}
+	return tempMap.keys();
 }
 
