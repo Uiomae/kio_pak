@@ -7,6 +7,8 @@
 #include <kde_file.h>
 #include <klocale.h>
 #include <kdebug.h>
+#include <kglobal.h>
+#include <kmimemagic.h>
 #include <kinstance.h>
 #include <kremoteencoding.h>
 
@@ -34,12 +36,14 @@ int kdemain( int argc, char **argv )
 	return 0;
 }
 
-PakProtocol::PakProtocol(const QCString &pool, const QCString &app): SlaveBase("pak", pool, app) {
+PakProtocol::PakProtocol(const QCString &pool, const QCString &app): SlaveBase("pak", pool, app), _pakFile(NULL) {
 	kdDebug(PAK_DEBUG_ID) << "PakProtocol::PakProtocol" << endl;
 }
 
 void PakProtocol::listDir(const KURL &url) {
+	kdDebug(PAK_DEBUG_ID) << "Entering listDir()" << endl;
 	QString path;
+
 	KIO::Error errorNum;
 	if ( !checkNewFile( url, path, errorNum ) )
 	{
@@ -138,6 +142,7 @@ void PakProtocol::listDir(const KURL &url) {
 }
 
 void PakProtocol::stat(const KURL &url) {
+	kdDebug(PAK_DEBUG_ID) << "Entering stat()" << endl;
 	QString path;
 	KIO::UDSEntry entry;
 	KIO::Error errorNum;
@@ -220,12 +225,162 @@ void PakProtocol::stat(const KURL &url) {
 }
 
 void PakProtocol::get(const KURL &url) {
-	kdDebug(PAK_DEBUG_ID) << "Entering get()" << endl;
+	kdDebug(PAK_DEBUG_ID) << "ArchiveProtocol::get " << url << endl;
+
+	QString path;
+	KIO::Error errorNum;
+	if ( !checkNewFile( url, path, errorNum ) )
+	{
+		if ( errorNum == KIO::ERR_CANNOT_OPEN_FOR_READING )
+		{
+			// If we cannot open, it might be a problem with the archive header (e.g. unsupported format)
+			// Therefore give a more specific error message
+			error( KIO::ERR_SLAVE_DEFINED,
+					i18n( "Could not open the file, probably due to an unsupported file format.\n%1")
+					.arg( url.prettyURL() ) );
+			return;
+		}
+		else
+		{
+			// We have any other error
+			error( errorNum, url.prettyURL() );
+			return;
+		}
+	}
+	kdDebug(PAK_DEBUG_ID) << "Continue getting" << endl;
+
+	path = QString::fromLocal8Bit(remoteEncoding()->encode(path));
+
+	kdDebug(PAK_DEBUG_ID) << "Path > " << path << endl;
+	const KArchiveDirectory* root = _pakFile->directory();
+	const KArchiveEntry* archiveEntry = root->entry( path );
+
+	kdDebug(PAK_DEBUG_ID) << "Check if no archiveEntry > " << archiveEntry << endl;
+	if ( !archiveEntry )
+	{
+		error( KIO::ERR_DOES_NOT_EXIST, url.prettyURL() );
+		return;
+	}
+	kdDebug(PAK_DEBUG_ID) << "archiveEntry::name > " << archiveEntry->name() << endl;
+	if ( archiveEntry->isDirectory() )
+	{
+		error( KIO::ERR_IS_DIRECTORY, url.prettyURL() );
+		return;
+	}
+	const KArchiveFile* archiveFileEntry = static_cast<const KArchiveFile *>(archiveEntry);
+	if ( !archiveEntry->symlink().isEmpty() )
+	{
+		kdDebug(7109) << "Redirection to " << archiveEntry->symlink() << endl;
+		KURL realURL;
+		if (archiveEntry->symlink().startsWith("/")) { // absolute path
+			realURL.setPath(archiveEntry->symlink() ); // goes out of tar:/, back into file:
+		} else {
+			realURL = KURL( url, archiveEntry->symlink() );
+		}
+		kdDebug(7109) << "realURL= " << realURL << endl;
+		redirection( realURL );
+		finished();
+		return;
+	}
+
+	//kdDebug(7109) << "Preparing to get the archive data" << endl;
+
+	/*
+	 * The easy way would be to get the data by calling archiveFileEntry->data()
+	 * However this has drawbacks:
+	 * - the complete file must be read into the memory
+	 * - errors are skipped, resulting in an empty file
+	 */
+
+	QIODevice* io = 0;
+	// Getting the device is hard, as archiveFileEntry->device() is not virtual!
+	if ( url.protocol() == "pak" )
+	{
+		io = archiveFileEntry->device();
+	}
+	else
+	{
+		// Wrong protocol? Why was this not catched by checkNewFile?
+		kdWarning(7109) << "Protocol " << url.protocol() << " not supported by this IOSlave; " << k_funcinfo << endl;
+		error( KIO::ERR_UNSUPPORTED_PROTOCOL, url.protocol() );
+		return;
+	}
+
+	if (!io)
+	{
+		error( KIO::ERR_SLAVE_DEFINED,
+				i18n( "The archive file could not be opened, perhaps because the format is unsupported.\n%1" )
+				.arg( url.prettyURL() ) );
+		return;
+	}
+
+	if ( !io->open( IO_ReadOnly ) )
+	{
+		error( KIO::ERR_CANNOT_OPEN_FOR_READING, url.prettyURL() );
+		return;
+	}
+
+	totalSize( archiveFileEntry->size() );
+
+	// Size of a QIODevice read. It must be large enough so that the mime type check will not fail
+	const int maxSize = 0x100000; // 1MB
+
+	int bufferSize = kMin( maxSize, archiveFileEntry->size() );
+	QByteArray buffer ( bufferSize );
+	if ( buffer.isEmpty() && bufferSize > 0 )
+	{
+		// Something went wrong
+		error( KIO::ERR_OUT_OF_MEMORY, url.prettyURL() );
+		return;
+	}
+
+	bool firstRead = true;
+
+	// How much file do we still have to process?
+	int fileSize = archiveFileEntry->size();
+	KIO::filesize_t processed = 0;
+
+	while ( !io->atEnd() && fileSize > 0 )
+	{
+		if ( !firstRead )
+		{
+			bufferSize = kMin( maxSize, fileSize );
+			buffer.resize( bufferSize, QGArray::SpeedOptim );
+		}
+		const Q_LONG read = io->readBlock( buffer.data(), buffer.size() ); // Avoid to use bufferSize here, in case something went wrong.
+		if ( read != bufferSize )
+		{
+			kdWarning(7109) << "Read " << read << " bytes but expected " << bufferSize << endl;
+			error( KIO::ERR_COULD_NOT_READ, url.prettyURL() );
+			return;
+		}
+		if ( firstRead )
+		{
+			// We use the magic one the first data read
+			// (As magic detection is about fixed positions, we can be sure that it is enough data.)
+			KMimeMagicResult * result = KMimeMagic::self()->findBufferFileType( buffer, path );
+			kdDebug(7109) << "Emitting mimetype " << result->mimeType() << endl;
+			mimeType( result->mimeType() );
+			firstRead = false;
+		}
+		data( buffer );
+		processed += read;
+		processedSize( processed );
+		fileSize -= bufferSize;
+	}
+	io->close();
+	delete io;
+
+	data( QByteArray() );
+
+	finished();
+
+	/*kdDebug(PAK_DEBUG_ID) << "Entering get()" << endl;
 	mimetype("text/plain");
 	QCString str("Hello Pak World!!");
 	data(str);
 	finished();
-	kdDebug(PAK_DEBUG_ID) << "Exiting get()" << endl;
+	kdDebug(PAK_DEBUG_ID) << "Exiting get()" << endl;*/
 }
 
 void PakProtocol::createUDSEntry(const KArchiveEntry *archiveEntry, KIO::UDSEntry &entry) {
@@ -266,15 +421,20 @@ bool PakProtocol::checkNewFile(const KURL &url, QString &path, KIO::Error &error
 			}
 		}
 	}
-	kdDebug(PAK_DEBUG_ID) << "Need to open a new file" << endl;
+	kdDebug(PAK_DEBUG_ID) << "Need to open a new file or check if dir" << endl;
 
 	// Close previous file
 	if ( _pakFile )
 	{
+		kdDebug(PAK_DEBUG_ID) << "1" << endl;
 		_pakFile->close();
+		kdDebug(PAK_DEBUG_ID) << "2" << endl;
 		delete _pakFile;
+		kdDebug(PAK_DEBUG_ID) << "3" << endl;
 		_pakFile = NULL;
 	}
+
+	kdDebug(PAK_DEBUG_ID) << "Going to find full path" << endl;
 
 	// Find where the tar file is in the full path
 	int pos = 0;
