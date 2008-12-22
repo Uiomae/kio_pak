@@ -430,11 +430,8 @@ bool PakProtocol::checkNewFile(const KURL &url, QString &path, KIO::Error &error
 	// Close previous file
 	if ( _pakFile )
 	{
-		kdDebug(PAK_DEBUG_ID) << "1" << endl;
 		_pakFile->close();
-		kdDebug(PAK_DEBUG_ID) << "2" << endl;
 		delete _pakFile;
-		kdDebug(PAK_DEBUG_ID) << "3" << endl;
 		_pakFile = NULL;
 	}
 

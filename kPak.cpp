@@ -37,20 +37,20 @@ bool KPak::openArchive(int mode) {
 		return false;
 	}
 
-	QStringList files(_pakFile->getAllFiles());
+	QValueList<libPak::PakFile> files(_pakFile->getAllFiles());
 	
-	for ( QStringList::Iterator it = files.begin(); it != files.end(); ++it ) {
-		QString temp((*it).mid(1));
+	for ( QValueList<libPak::PakFile>::Iterator it = files.begin(); it != files.end(); ++it ) {
+		QString temp((*it).filename.mid(1));
 		temp.replace("\\", "/");
 		int pos = temp.findRev("/");
 		QString file;
 		file = temp.mid(pos + 1);
 		// TODO: Add position and size
-		KArchiveEntry *e = new KArchiveFile(this, file, 0444, 0, /*uid*/0, /*gid*/0, /*symlink*/0, 0, 0);
+		KArchiveEntry *e = new KArchiveFile(this, file, 0444, 0, /*uid*/0, /*gid*/0, /*symlink*/0, (int)(*it).offset, (*it).size);
 		if (pos == -1) {
 			rootDir()->addEntry(e);
 		} else {
-			QString path = QDir::cleanDirPath( (*it).mid(1).replace("\\", "/").left(pos) );
+			QString path = QDir::cleanDirPath( (*it).filename.mid(1).replace("\\", "/").left(pos) );
 			KArchiveDirectory *d = findOrCreate(path);
 			d->addEntry(e);
 		}
