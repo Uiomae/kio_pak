@@ -396,7 +396,11 @@ void PakProtocol::createUDSEntry(const KArchiveEntry *archiveEntry, KIO::UDSEntr
 	entry.append(atom);
 
 	atom.m_uds = KIO::UDS_FILE_TYPE;
-	atom.m_long = 444;
+	atom.m_long = archiveEntry->permissions() & S_IFMT; // keep file type only
+	entry.append(atom);
+
+	atom.m_uds = KIO::UDS_ACCESS;
+	atom.m_long = archiveEntry->permissions() & 07777; // keep permissions only
 	entry.append(atom);
 }
 
