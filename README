@@ -1,0 +1,16 @@
+kio_pak: A KDE3 kioslave to explore and modify SingStar .pak files
+
+Why:
+	First of all, I've written this tool because I wanted to know about kioslaves, and though this would be the better way. Also, I wanted to have a tool to explore and modify .pak files easily, withouth having to "write my own".
+
+When:
+	For now, reading is the only feature supported, but it works flawesly!
+
+What:
+	Code is written in C++, using LOT of code from tar kioslave from kde-base package. Also, take in account that I've reverse engineered .pak files myself, and maybe I've got something wrong. If that's the case, please warn me!
+
+Whom:
+	If you'd like to help, please be my guest! Just in case, please send me an email to <uiomae@gmail.com>. And thanks!
+
+
+Copyright © 2008 - Uiomae
