@@ -7,3 +7,4 @@ Makefile
 *.so
 *.la
 *.swp
+doc/
